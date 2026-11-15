@@ -9,7 +9,6 @@ use crate::{
     map::{circle_map, UNICODE_FRAGMENTS},
     Cell, Fragment, Merge, Point, Settings,
 };
-use itertools::Itertools;
 use std::{
     fmt,
     ops::{Deref, DerefMut},
@@ -89,19 +88,17 @@ impl Span {
 
     /// returns the top_left most cell which aligns the top most and the left most cell.
     pub(crate) fn bounds(&self) -> Option<(Cell, Cell)> {
-        if let Some((min_y, max_y)) =
-            self.iter().map(|(cell, _)| cell.y).minmax().into_option()
-        {
-            if let Some((min_x, max_x)) =
-                self.iter().map(|(cell, _)| cell.x).minmax().into_option()
-            {
-                Some((Cell::new(min_x, min_y), Cell::new(max_x, max_y)))
-            } else {
-                None
-            }
-        } else {
-            None
+        let mut cells = self.iter().map(|(cell, _)| *cell);
+        let first = cells.next()?;
+        let (mut min_x, mut max_x) = (first.x, first.x);
+        let (mut min_y, mut max_y) = (first.y, first.y);
+        for cell in cells {
+            min_x = min_x.min(cell.x);
+            max_x = max_x.max(cell.x);
+            min_y = min_y.min(cell.y);
+            max_y = max_y.max(cell.y);
         }
+        Some((Cell::new(min_x, min_y), Cell::new(max_x, max_y)))
     }
 
     pub fn cell_bounds(&self) -> Option<Bounds> {
@@ -115,12 +112,11 @@ impl Span {
     /// shift the cells relative to the top_left most bound
     pub(crate) fn localize(self) -> Self {
         if let Some((tl, _br)) = self.bounds() {
-            let mut new_self = Span(vec![]);
-            for (cell, ch) in self.iter() {
-                let local_cell = tl.localize_cell(*cell);
-                new_self.push((local_cell, *ch));
+            let mut localized = self;
+            for (cell, _) in localized.iter_mut() {
+                *cell = tl.localize_cell(*cell);
             }
-            new_self
+            localized
         } else {
             self
         }
@@ -222,8 +218,8 @@ impl Span {
     pub(crate) fn extract(&self, bound1: Cell, bound2: Cell) -> Self {
         Span(
             self.iter()
+                .filter(|(cell, _)| cell.is_bounded(bound1, bound2))
                 .map(|(cell, ch)| (*cell, *ch))
-                .filter(|(cell, _ch)| cell.is_bounded(bound1, bound2))
                 .collect(),
         )
     }
@@ -241,8 +237,9 @@ impl Span {
 
     /// merge as is without checking it it can
     pub fn merge_no_check(&self, other: &Self) -> Self {
-        let mut cells = self.0.clone();
-        cells.extend(&other.0);
+        let mut cells = Vec::with_capacity(self.len() + other.len());
+        cells.extend_from_slice(&self.0);
+        cells.extend_from_slice(&other.0);
         Span(cells)
     }
 }
@@ -286,6 +283,12 @@ impl Bounds {
 /// create a property buffer for all the cells of this span
 impl<'p> From<Span> for PropertyBuffer<'p> {
     fn from(span: Span) -> Self {
+        Self::from(&span)
+    }
+}
+
+impl<'p> From<&Span> for PropertyBuffer<'p> {
+    fn from(span: &Span) -> Self {
         let mut pb = PropertyBuffer::new();
         for (cell, ch) in span.iter() {
             if let Some(property) = Property::from_char(*ch) {
@@ -324,8 +327,8 @@ impl From<Span> for Vec<Contacts> {
 /// otherwise add it to the fragment_buffer as a text fragment
 impl From<Span> for FragmentBuffer {
     fn from(span: Span) -> FragmentBuffer {
-        let pb = PropertyBuffer::from(span.clone());
-        let mut fb = FragmentBuffer::from(pb.clone());
+        let pb = PropertyBuffer::from(&span);
+        let mut fb = FragmentBuffer::from(&pb);
         for (cell, ch) in span.iter() {
             if pb.as_ref().get(cell).is_none() {
                 if let Some(fragments) = UNICODE_FRAGMENTS.get(ch) {

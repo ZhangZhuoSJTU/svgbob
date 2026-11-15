@@ -4,6 +4,7 @@ use crate::{
     map::{ASCII_PROPERTIES, UNICODE_PROPERTIES},
     Fragment, Point,
 };
+use once_cell::sync::Lazy;
 use std::{cmp, fmt, sync::Arc};
 
 ///
@@ -58,6 +59,9 @@ pub struct Property {
     /// context if it meets the required condition
     signature: Vec<(Signal, Vec<Fragment>)>,
 
+    /// normalized strong fragments, cached for repeated character matching
+    strong_profile: Vec<Fragment>,
+
     /// behavior is the final output of fragments of the spot character
     /// depending on flag that is meet when checked against the surrounding characters
     pub behavior: Arc<
@@ -106,9 +110,17 @@ impl Property {
                 + Send,
         >,
     ) -> Self {
+        let mut strong_profile: Vec<Fragment> = signature
+            .iter()
+            .filter(|(signal, _)| *signal == Strong)
+            .flat_map(|(_, fragments)| fragments.iter().cloned())
+            .collect();
+        strong_profile.sort();
+        strong_profile.dedup();
         Property {
             ch,
             signature,
+            strong_profile,
             behavior,
         }
     }
@@ -126,11 +138,18 @@ impl Property {
     /// empty property serves as a substitute for None property for simplicity in
     /// the behavior code, never have to deal with Option
     pub fn empty() -> Self {
-        Property {
-            ch: ' ',
-            signature: vec![],
-            behavior: Arc::new(|_, _, _, _, _, _, _, _| vec![]),
-        }
+        Self::empty_ref().clone()
+    }
+
+    pub(crate) fn empty_ref() -> &'static Self {
+        static EMPTY: Lazy<Property> = Lazy::new(|| {
+            Property::new(
+                ' ',
+                vec![],
+                Arc::new(|_, _, _, _, _, _, _, _| vec![]),
+            )
+        });
+        &EMPTY
     }
 
     /// derive a strong property with a strong signal
@@ -138,32 +157,13 @@ impl Property {
         ch: char,
         fragments: Vec<Fragment>,
     ) -> Self {
-        Property {
+        Self::new(
             ch,
-            signature: vec![(Signal::Strong, fragments.clone())],
-            behavior: Arc::new(move |_, _, _, _, _, _, _, _| {
+            vec![(Signal::Strong, fragments.clone())],
+            Arc::new(move |_, _, _, _, _, _, _, _| {
                 vec![(true, fragments.clone())]
             }),
-        }
-    }
-
-    fn signature_fragments_with_signal(&self, signal: Signal) -> Vec<Fragment> {
-        let mut fragments: Vec<Fragment> = self
-            .signature
-            .iter()
-            .filter_map(|(sig, fragments)| {
-                if *sig == signal {
-                    Some(fragments)
-                } else {
-                    None
-                }
-            })
-            .flatten()
-            .map(Clone::clone)
-            .collect();
-        fragments.sort();
-        fragments.dedup();
-        fragments
+        )
     }
 
     /// Check if the property is exactly this character
@@ -179,8 +179,11 @@ impl Property {
     /// returns true of the fragments parameters match the fragments with strong signal in this
     /// property
     pub fn match_profile(&self, fragments: &[Fragment]) -> bool {
-        let signature_fragments = self.signature_fragments_with_signal(Strong);
-        signature_fragments == *fragments
+        self.strong_profile.as_slice() == fragments
+    }
+
+    pub(crate) fn strong_profile(&self) -> &[Fragment] {
+        &self.strong_profile
     }
 
     /// Check to see if this spot can overal the line a b with at least Medium signal
@@ -250,15 +253,12 @@ impl Property {
             bottom,
             bottom_right,
         );
-        let cell_fragments: Vec<Fragment> = bool_fragments.into_iter().fold(
-            vec![],
-            |mut acc, (passed, fragments)| {
-                if passed {
-                    acc.extend(fragments);
-                };
-                acc
-            },
-        );
+        let mut cell_fragments = Vec::with_capacity(bool_fragments.len());
+        for (passed, fragments) in bool_fragments {
+            if passed {
+                cell_fragments.extend(fragments);
+            }
+        }
         cell_fragments
     }
 }

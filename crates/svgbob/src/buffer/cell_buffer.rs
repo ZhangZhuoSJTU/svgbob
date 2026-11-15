@@ -70,16 +70,17 @@ impl CellBuffer {
     }
 
     pub fn bounds(&self) -> Option<(Cell, Cell)> {
-        let xlimits =
-            self.iter().map(|(cell, _)| cell.x).minmax().into_option();
-        let ylimits =
-            self.iter().map(|(cell, _)| cell.y).minmax().into_option();
-        match (xlimits, ylimits) {
-            (Some((min_x, max_x)), Some((min_y, max_y))) => {
-                Some((Cell::new(min_x, min_y), Cell::new(max_x, max_y)))
-            }
-            _ => None,
+        let mut cells = self.iter().map(|(cell, _)| *cell);
+        let first = cells.next()?;
+        let (mut min_x, mut max_x) = (first.x, first.x);
+        let (mut min_y, mut max_y) = (first.y, first.y);
+        for cell in cells {
+            min_x = min_x.min(cell.x);
+            max_x = max_x.max(cell.x);
+            min_y = min_y.min(cell.y);
+            max_y = max_y.max(cell.y);
         }
+        Some((Cell::new(min_x, min_y), Cell::new(max_x, max_y)))
     }
 
     /// get the svg node of this cell buffer, using the default settings for the sizes
@@ -134,22 +135,13 @@ impl CellBuffer {
     /// return the fragments that are (close objects, touching grouped fragments)
     pub fn get_fragment_spans(&self) -> (Vec<FragmentSpan>, Vec<Span>) {
         let escaped_text = self.escaped_text_nodes();
-
-        let group_adjacents = Vec::<Span>::from(self);
-        let (endorsed_fragments, vec_spans): (
-            Vec<Vec<FragmentSpan>>,
-            Vec<Vec<Span>>,
-        ) = group_adjacents
-            .into_iter()
-            .map(|span| span.endorse())
-            .map(|endorse| (endorse.accepted, endorse.rejects))
-            .unzip();
-
-        let mut accepted: Vec<FragmentSpan> =
-            endorsed_fragments.into_iter().flatten().collect();
-
-        let rejects: Vec<Span> = vec_spans.into_iter().flatten().collect();
-
+        let mut accepted = Vec::new();
+        let mut rejects = Vec::new();
+        for span in Vec::<Span>::from(self) {
+            let endorsed = span.endorse();
+            accepted.extend(endorsed.accepted);
+            rejects.extend(endorsed.rejects);
+        }
         accepted.extend(escaped_text);
 
         (accepted, rejects)
@@ -174,47 +166,33 @@ impl CellBuffer {
         // vec_groups are not endorsed, but are still touching, these will be grouped together in
         // the svg node
         let group_adjacents: Vec<Span> = self.into();
-        let (endorsed_fragments, vec_contacts): (
-            Vec<Vec<FragmentSpan>>,
-            Vec<Vec<Contacts>>,
-        ) = group_adjacents
-            .into_iter()
-            .map(|span| span.endorse())
-            .map(|endorse| {
-                (
-                    endorse.accepted,
-                    endorse
-                        .rejects
-                        .into_iter()
-                        .flat_map(|span| <Vec<Contacts>>::from(span))
-                        .collect::<Vec<Contacts>>(),
-                )
-            })
-            .unzip();
+        let mut endorsed_fragments = Vec::new();
+        let mut vec_contacts = Vec::new();
+        for span in group_adjacents {
+            let endorsed = span.endorse();
+            endorsed_fragments.extend(endorsed.accepted);
+            for rejected_span in endorsed.rejects {
+                vec_contacts.extend(Vec::<Contacts>::from(rejected_span));
+            }
+        }
 
         // partition the vec_groups into groups that is alone and the group
         // that is contacting their parts
         let (single_member, vec_groups): (Vec<Contacts>, Vec<Contacts>) =
             vec_contacts
                 .into_iter()
-                .flatten()
-                .partition(move |contacts| contacts.0.len() == 1);
+                .partition(|contacts| contacts.0.len() == 1);
 
         let single_member_fragments: Vec<FragmentSpan> = single_member
             .into_iter()
-            .flat_map(|contact| contact.as_ref().to_vec())
+            .flat_map(|contact| contact.0)
             .collect();
 
-        let rejects: Vec<Vec<FragmentSpan>> = vec_groups
-            .into_iter()
-            .map(|contact| contact.as_ref().to_vec())
-            .collect();
+        let rejects: Vec<Vec<FragmentSpan>> =
+            vec_groups.into_iter().map(|contact| contact.0).collect();
 
-        let accepted: Vec<FragmentSpan> = endorsed_fragments
-            .into_iter()
-            .flatten()
-            .chain(single_member_fragments.into_iter())
-            .collect();
+        let mut accepted = endorsed_fragments;
+        accepted.extend(single_member_fragments);
         Endorse { accepted, rejects }
     }
 
@@ -231,14 +209,11 @@ impl CellBuffer {
         let group_nodes: Vec<Node<MSG>> = rejects
             .into_iter()
             .map(move |fragments| {
-                let group_members = fragments
-                    .iter()
-                    .map(move |gfrag| {
-                        let scaled = gfrag.scale(settings.scale);
-                        let node: Node<MSG> = scaled.fragment.into();
-                        node
-                    })
-                    .collect::<Vec<Node<MSG>>>();
+                let group_members = fragments.into_iter().map(move |gfrag| {
+                    let scaled = gfrag.fragment.into_scale(settings.scale);
+                    let node: Node<MSG> = scaled.into();
+                    node
+                });
                 g([], group_members)
             })
             .collect();
@@ -259,14 +234,23 @@ impl CellBuffer {
 
     /// construct the css from the # Legend: of the diagram
     fn legend_css(&self) -> String {
-        let classes: Vec<String> = self
+        use std::fmt::Write as _;
+
+        let estimated_len = self
             .css_styles
             .iter()
-            .map(|(class, styles)| {
-                format!(".svgbob .{}{{ {} }}", class, styles)
-            })
-            .collect();
-        classes.join("\n")
+            .map(|(class, styles)| class.len() + styles.len() + 19)
+            .sum::<usize>()
+            .saturating_add(self.css_styles.len().saturating_sub(1));
+        let mut css = String::with_capacity(estimated_len);
+        for (index, (class, styles)) in self.css_styles.iter().enumerate() {
+            if index != 0 {
+                css.push('\n');
+            }
+            write!(css, ".svgbob .{}{{ {} }}", class, styles)
+                .expect("writing to a String cannot fail");
+        }
+        css
     }
 
     fn style<MSG>(settings: &Settings, legend_css: String) -> Node<MSG> {
@@ -364,7 +348,11 @@ impl CellBuffer {
 
         // Combine the css, so as not to have a <!-- separator --> comment which
         // was intended only for text node added after a previous text node.
-        let css = [element_styles, legend_css].join("\n");
+        let mut css =
+            String::with_capacity(element_styles.len() + legend_css.len() + 1);
+        css.push_str(&element_styles);
+        css.push('\n');
+        css.push_str(&legend_css);
         html::tags::style([], [text(css)])
     }
 
@@ -379,12 +367,20 @@ impl CellBuffer {
     ) -> Node<MSG> {
         let fragments_scaled: Vec<FragmentSpan> = fragments
             .into_iter()
-            .map(|frag| frag.scale(settings.scale))
+            .map(|frag| FragmentSpan {
+                span: frag.span,
+                fragment: frag.fragment.into_scale(settings.scale),
+            })
             .collect();
         let fragment_nodes: Vec<Node<MSG>> =
             FragmentTree::fragments_to_node(fragments_scaled);
 
-        let mut children = vec![];
+        let mut children = Vec::with_capacity(
+            fragment_nodes.len()
+                + settings.include_styles as usize
+                + settings.include_defs as usize
+                + settings.include_backdrop as usize,
+        );
         if settings.include_styles {
             children.push(Self::style(settings, legend_css));
         }
@@ -514,48 +510,38 @@ impl CellBuffer {
 
     /// returns a (Cell, escaped string), and the strings that are not part of the escape string
     fn escape_line(line: usize, raw: &str) -> (Vec<(Cell, String)>, String) {
-        let mut no_escaped_text = String::new();
+        if !raw.contains('"') {
+            return (Vec::new(), raw.to_owned());
+        }
+
+        let mut no_escaped_text = String::with_capacity(raw.len());
 
         let mut index = 0;
-        let mut escaped_text = vec![];
         let input_chars: Vec<char> = raw.chars().collect();
         let char_locs = parser::line_parse()
             .parse(&input_chars)
             .expect("should parse");
+        let mut escaped_text = Vec::with_capacity(char_locs.len());
         if char_locs.is_empty() {
-            no_escaped_text = raw.to_string();
+            no_escaped_text.push_str(raw);
         } else {
             for (start, end) in char_locs.iter() {
-                let escaped = input_chars[*start + 1..*end].iter().fold(
-                    String::new(),
-                    |mut acc, c| {
-                        acc.push(*c);
-                        acc
-                    },
-                );
+                let escaped: String =
+                    input_chars[*start + 1..*end].iter().copied().collect();
                 let escaped_unicode_width = escaped.width();
                 let cell = Cell::new(*start as i32, line as i32);
                 escaped_text.push((cell, escaped));
-                no_escaped_text += &input_chars[index..*start].iter().fold(
-                    String::new(),
-                    |mut acc, c| {
-                        acc.push(*c);
-                        acc
-                    },
-                );
+                no_escaped_text
+                    .extend(input_chars[index..*start].iter().copied());
 
                 // we add 2 to account for the double quotes on end of the escaped string
-                no_escaped_text += &" ".repeat(escaped_unicode_width + 2);
+                no_escaped_text.extend(
+                    std::iter::repeat(' ').take(escaped_unicode_width + 2),
+                );
                 index = end + 1;
             }
             // include the rest of the text
-            no_escaped_text += &input_chars[index..].iter().fold(
-                String::new(),
-                |mut acc, c| {
-                    acc.push(*c);
-                    acc
-                },
-            );
+            no_escaped_text.extend(input_chars[index..].iter().copied());
         }
         (escaped_text, no_escaped_text)
     }

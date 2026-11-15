@@ -1,6 +1,17 @@
 use std::ops::{Deref, DerefMut};
 use unicode_width::UnicodeWidthChar;
 
+fn append_line(row: &mut Vec<char>, chars: &mut std::str::Chars<'_>) {
+    if let Some(ch) = chars.next() {
+        let width = ch.width().unwrap_or(1);
+        append_line(row, chars);
+        for _ in 1..width {
+            row.push('\0');
+        }
+        row.push(ch);
+    }
+}
+
 /// A 2D string buffer
 /// where you can insert a character to any cell on the 2D grid
 /// each cell can be assigned with a string
@@ -68,8 +79,44 @@ impl StringBuffer {
 
     /// replace insert a string on this location
     pub fn add_str(&mut self, x: i32, y: i32, s: &str) {
-        for (i, ch) in s.chars().enumerate() {
-            self.add_char(x + i as i32, y, ch);
+        if y < 0 {
+            for (offset, ch) in s.chars().enumerate() {
+                self.add_char(x + offset as i32, y, ch);
+            }
+            return;
+        }
+
+        if let Some(max_column) = s
+            .chars()
+            .enumerate()
+            .filter_map(|(offset, ch)| {
+                let column = x + offset as i32;
+                (column >= 0 && ch != '\0').then_some(column)
+            })
+            .max()
+        {
+            let row_index = y as usize;
+            let row_diff = y - self.len() as i32;
+            if row_diff >= 0 {
+                self.add_rows(row_diff + 1);
+            }
+
+            let column_diff = max_column - self[row_index].len() as i32;
+            if column_diff >= 0 {
+                self.add_column(row_index, column_diff + 1);
+            }
+        }
+
+        let row_index = y as usize;
+        for (offset, ch) in s.chars().enumerate() {
+            let column = x + offset as i32;
+            if column >= 0 {
+                if ch == '\0' {
+                    println!("skipping {}", ch);
+                } else {
+                    self[row_index][column as usize] = ch;
+                }
+            }
         }
     }
 }
@@ -79,14 +126,8 @@ impl From<&str> for StringBuffer {
         let mut rows = vec![];
         for line in s.lines() {
             let mut row = vec![];
-            for ch in line.chars() {
-                row.push(ch);
-                if let Some(width) = ch.width() {
-                    for _i in 1..width {
-                        row.push('\0');
-                    }
-                }
-            }
+            append_line(&mut row, &mut line.chars());
+            row.reverse();
             rows.push(row);
         }
 
@@ -96,16 +137,23 @@ impl From<&str> for StringBuffer {
 
 impl ToString for StringBuffer {
     fn to_string(&self) -> String {
-        let mut lines = vec![];
-        for row in self.iter() {
-            let row_contents: Vec<String> = row
+        let mut output = String::new();
+        for (row_index, row) in self.iter().enumerate() {
+            if row_index > 0 {
+                output.push('\n');
+            }
+            let Some(last_content) = row
                 .iter()
-                .filter(|ch| **ch != '\0')
-                .map(ToString::to_string)
-                .collect();
-            let line = row_contents.join("").trim_end().to_string();
-            lines.push(line);
+                .rposition(|ch| *ch != '\0' && !ch.is_whitespace())
+            else {
+                continue;
+            };
+            for ch in &row[..=last_content] {
+                if *ch != '\0' {
+                    output.push(*ch);
+                }
+            }
         }
-        lines.join("\n")
+        output
     }
 }
