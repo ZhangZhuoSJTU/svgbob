@@ -10,13 +10,14 @@ pub trait Merge {
     where
         Self: Sized,
     {
-        let items: Vec<Self> = items.into_iter().collect();
-        let original_len = items.len();
-        let merged = Self::second_pass_merge(items);
-        if merged.len() < original_len {
-            Self::merge_recursive(merged)
-        } else {
-            merged
+        let mut items: Vec<Self> = items.into_iter().collect();
+        loop {
+            let original_len = items.len();
+            let merged = Self::second_pass_merge(items);
+            if merged.len() >= original_len {
+                return merged;
+            }
+            items = merged;
         }
     }
 
@@ -26,8 +27,9 @@ pub trait Merge {
     where
         Self: Sized,
     {
-        let mut new_groups: Vec<Self> = vec![];
-        for item in items.into_iter() {
+        let items = items.into_iter();
+        let mut new_groups: Vec<Self> = Vec::with_capacity(items.size_hint().0);
+        for item in items {
             if !new_groups.iter_mut().rev().any(|new_group| {
                 if let Some(new_merged) = new_group.merge(&item) {
                     *new_group = new_merged;

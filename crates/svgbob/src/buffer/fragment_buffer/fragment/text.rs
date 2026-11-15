@@ -27,24 +27,17 @@ impl CellText {
         Cell::new(self.start.x + self.content.len() as i32, self.start.y)
     }
 
-    /// get the cells of this text
-    /// TODO: use iterator
-    fn cells(&'_ self) -> impl IntoIterator<Item = Cell> + '_ {
-        let range = self.start.x..(self.start.x + self.content.len() as i32);
-        range.map(move |x| Cell::new(x, self.start.y))
-    }
-
-    fn is_adjacent_cell(&self, other_cell: Cell) -> bool {
-        self.cells()
-            .into_iter()
-            .any(|cell| cell.y == other_cell.y && cell.is_adjacent(&other_cell))
-    }
-
     /// cell text is groupable when they are adjacent
     pub(crate) fn is_contacting(&self, other: &Self) -> bool {
-        self.cells()
-            .into_iter()
-            .any(|cell| other.is_adjacent_cell(cell))
+        if self.content.is_empty() || other.content.is_empty() {
+            return false;
+        }
+
+        let self_end = self.start.x + self.content.len() as i32;
+        let other_end = other.start.x + other.content.len() as i32;
+        self.start.y == other.start.y
+            && self.start.x <= other_end
+            && other.start.x <= self_end
     }
 
     /// text can merge if they are next to each other and at the same line
@@ -56,17 +49,15 @@ impl CellText {
 
     pub(crate) fn merge(&self, other: &Self) -> Option<Self> {
         if self.can_merge(other) {
-            if self.start.x < other.start.x {
-                Some(CellText::new(
-                    self.start,
-                    format!("{}{}", self.content, other.content),
-                ))
+            let (start, first, second) = if self.start.x < other.start.x {
+                (self.start, &self.content, &other.content)
             } else {
-                Some(CellText::new(
-                    other.start,
-                    format!("{}{}", other.content, self.content),
-                ))
-            }
+                (other.start, &other.content, &self.content)
+            };
+            let mut content = String::with_capacity(first.len() + second.len());
+            content.push_str(first);
+            content.push_str(second);
+            Some(CellText::new(start, content))
         } else {
             None
         }

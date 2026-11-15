@@ -668,7 +668,7 @@ pub static DIAMETER_CIRCLE: Lazy<HashMap<i32, (Point, Span)>> =
     Lazy::new(|| {
         HashMap::from_iter(CIRCLE_MAP.iter().map(|circle_art| {
             let cb = CellBuffer::from(circle_art.ascii_art);
-            let mut spans= Vec::<Span>::from(&cb);
+            let mut spans = Vec::<Span>::from(&cb);
             assert_eq!(spans.len(), 1);
             let span = spans.remove(0).localize();
             (circle_art.diameter(), (circle_art.center(), span))
@@ -679,7 +679,7 @@ pub static DIAMETER_CIRCLE: Lazy<HashMap<i32, (Point, Span)>> =
 pub static CIRCLES_SPAN: Lazy<IndexMap<Circle, Span>> = Lazy::new(|| {
     IndexMap::from_iter(CIRCLE_MAP.iter().map(|circle_art| {
         let cb = CellBuffer::from(circle_art.ascii_art);
-        let mut spans =  Vec::<Span>::from(&cb);
+        let mut spans = Vec::<Span>::from(&cb);
         assert_eq!(spans.len(), 1);
         let span = spans.remove(0).localize();
         (
@@ -1064,122 +1064,78 @@ fn circle_art_to_span(art: &str) -> Span {
 }
 
 pub fn endorse_circle_span(search: &Span) -> Option<(&Circle, Span)> {
-    CIRCLES_SPAN.iter().rev().find_map(|(circle, span)| {
-        let search_localized = search.clone().localize();
-        let (matched, unmatched) = is_subset_of(span, &search_localized);
-        if matched {
-            let unmatched_cell_chars = search
-                .iter()
-                .enumerate()
-                .filter_map(|(i, cell_char)| {
-                    if unmatched.contains(&i) {
-                        Some(*cell_char)
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>();
-            Some((circle, Span::from(unmatched_cell_chars)))
-        } else {
-            None
-        }
-    })
+    find_matching_span(search, CIRCLES_SPAN.iter())
 }
 
 pub fn endorse_quarter_arc_span(search: &Span) -> Option<(&Arc, Span)> {
-    FLATTENED_QUARTER_ARC_SPAN.iter().rev().find_map(
-        |(_diameter, (arc, span))| {
-            let search_localized = search.clone().localize();
-            let (matched, unmatched) = is_subset_of(span, &search_localized);
-            if matched {
-                let unmatched_cell_chars = search
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, cell_char)| {
-                        if unmatched.contains(&i) {
-                            Some(*cell_char)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                Some((arc, Span::from(unmatched_cell_chars)))
-            } else {
-                None
-            }
-        },
+    find_matching_span(
+        search,
+        FLATTENED_QUARTER_ARC_SPAN
+            .iter()
+            .map(|(_, (arc, span))| (arc, span)),
     )
 }
 
 pub fn endorse_half_arc_span(search: &Span) -> Option<(&Arc, Span)> {
-    FLATTENED_HALF_ARC_SPAN
-        .iter()
-        .rev()
-        .find_map(|(_diameter, (arc, span))| {
-            let search_localized = search.clone().localize();
-            let (matched, unmatched) = is_subset_of(span, &search_localized);
-            if matched {
-                let unmatched_cell_chars = search
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, cell_char)| {
-                        if unmatched.contains(&i) {
-                            Some(*cell_char)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                Some((arc, Span::from(unmatched_cell_chars)))
-            } else {
-                None
-            }
-        })
-}
-
-pub fn endorse_three_quarters_arc_span(search: &Span) -> Option<(&Arc, Span)> {
-    FLATTENED_THREE_QUARTERS_ARC_SPAN.iter().rev().find_map(
-        |(_diameter, (arc, span))| {
-            let search_localized = search.clone().localize();
-            let (matched, unmatched) = is_subset_of(span, &search_localized);
-            if matched {
-                let unmatched_cell_chars = search
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, cell_char)| {
-                        if unmatched.contains(&i) {
-                            Some(*cell_char)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                Some((arc, Span::from(unmatched_cell_chars)))
-            } else {
-                None
-            }
-        },
+    find_matching_span(
+        search,
+        FLATTENED_HALF_ARC_SPAN
+            .iter()
+            .map(|(_, (arc, span))| (arc, span)),
     )
 }
 
-/// returns true if all the contacts in subset is in big_set
-/// This also returns the indices of big_set that are not found in the subset
+pub fn endorse_three_quarters_arc_span(search: &Span) -> Option<(&Arc, Span)> {
+    find_matching_span(
+        search,
+        FLATTENED_THREE_QUARTERS_ARC_SPAN
+            .iter()
+            .map(|(_, (arc, span))| (arc, span)),
+    )
+}
+
+fn find_matching_span<'a, T>(
+    search: &Span,
+    patterns: impl DoubleEndedIterator<Item = (&'a T, &'a Span)>,
+) -> Option<(&'a T, Span)> {
+    let top_left = search
+        .bounds()
+        .map(|(top_left, _)| top_left)
+        .unwrap_or_else(|| Cell::new(0, 0));
+    let localized: Vec<(Cell, char)> = search
+        .iter()
+        .map(|(cell, ch)| (top_left.localize_cell(*cell), *ch))
+        .collect();
+    patterns.rev().find_map(|(value, pattern)| {
+        let (matched, unmatched) = is_subset_of(pattern, &localized);
+        if !matched {
+            return None;
+        }
+
+        let unmatched_cell_chars: Vec<(Cell, char)> = search
+            .iter()
+            .enumerate()
+            .filter_map(|(index, cell_char)| {
+                unmatched
+                    .binary_search(&index)
+                    .is_ok()
+                    .then_some(*cell_char)
+            })
+            .collect();
+        Some((value, Span::from(unmatched_cell_chars)))
+    })
+}
+
 fn is_subset_of<T: PartialEq>(
     subset: &[T],
     big_set: &[T],
 ) -> (bool, Vec<usize>) {
-    let mut unmatched = vec![];
-    let mut matched = 0;
-    for (_i, set) in subset.iter().enumerate() {
-        if big_set.contains(set) {
-            matched += 1;
-        }
-    }
-    for (bi, bset) in big_set.iter().enumerate() {
-        if !subset.contains(bset) {
-            unmatched.push(bi);
-        }
-    }
+    let matched = subset.iter().filter(|item| big_set.contains(item)).count();
+    let unmatched = big_set
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| (!subset.contains(item)).then_some(index))
+        .collect();
     (matched == subset.len(), unmatched)
 }
 

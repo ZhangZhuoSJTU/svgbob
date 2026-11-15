@@ -32,12 +32,28 @@ impl Contacts {
     }
 
     pub fn cells(&self) -> Vec<Cell> {
-        self.0.iter().flat_map(|fs| fs.cells()).collect()
+        let cell_count = self
+            .0
+            .iter()
+            .map(|fragment_span| fragment_span.span.len())
+            .sum();
+        let mut cells = Vec::with_capacity(cell_count);
+        for fragment_span in &self.0 {
+            cells.extend(fragment_span.span.iter().map(|(cell, _)| *cell));
+        }
+        cells
     }
 
     pub fn span(&self) -> Span {
-        let cell_chars: Vec<(Cell, char)> =
-            self.0.iter().flat_map(|fs| fs.span.0.clone()).collect();
+        let cell_count = self
+            .0
+            .iter()
+            .map(|fragment_span| fragment_span.span.len())
+            .sum();
+        let mut cell_chars = Vec::with_capacity(cell_count);
+        for fragment_span in &self.0 {
+            cell_chars.extend_from_slice(&fragment_span.span.0);
+        }
         cell_chars.into()
     }
 
@@ -105,20 +121,27 @@ impl Contacts {
     }
 
     pub fn is_bounded(&self, bound1: Cell, bound2: Cell) -> bool {
-        self.cells()
-            .iter()
-            .all(|cell| cell.is_bounded(bound1, bound2))
+        self.0.iter().all(|fragment_span| {
+            fragment_span
+                .span
+                .iter()
+                .all(|(cell, _)| cell.is_bounded(bound1, bound2))
+        })
     }
 
     pub fn hit_cell(&self, needle: Cell) -> bool {
-        self.cells().iter().any(|cell| *cell == needle)
+        self.0.iter().any(|fragment_span| {
+            fragment_span.span.iter().any(|(cell, _)| *cell == needle)
+        })
     }
 }
 
 impl Merge for Contacts {
     fn merge(&self, other: &Self) -> Option<Self> {
         if self.is_contacting(&other) {
-            let mut fragment_spans: Vec<FragmentSpan> = self.0.clone();
+            let mut fragment_spans =
+                Vec::with_capacity(self.0.len() + other.0.len());
+            fragment_spans.extend_from_slice(&self.0);
             fragment_spans.extend_from_slice(&other.0);
             Some(Contacts(fragment_spans))
         } else {

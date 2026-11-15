@@ -46,22 +46,23 @@ impl FragmentTree {
     /// Try to put the other fragment somwhere in the tree, but traversing the depth first.
     /// This is needed for accurately tagging which shapes by putting the right cell_text into
     /// it's direct parent instead of just checking whether the text is bounded by some shapes.
-    fn enclose_deep_first(&mut self, other: &Self) -> bool {
+    fn enclose_deep_first(&mut self, mut other: Self) -> Result<(), Self> {
         for child in &mut self.enclosing {
-            if child.enclose_deep_first(other) {
-                return true;
+            match child.enclose_deep_first(other) {
+                Ok(()) => return Ok(()),
+                Err(unplaced) => other = unplaced,
             }
         }
-        if self.can_fit(other) {
+        if self.can_fit(&other) {
             let css_tags = other.fragment.fragment.as_css_tag();
             if !css_tags.is_empty() {
                 self.css_tag.extend(css_tags);
             } else {
-                self.enclosing.push(other.clone());
+                self.enclosing.push(other);
             }
-            true
+            Ok(())
         } else {
-            false
+            Err(other)
         }
     }
 
@@ -72,43 +73,46 @@ impl FragmentTree {
     }
 
     pub(crate) fn enclose_recursive(fragment_trees: Vec<Self>) -> Vec<Self> {
-        let original_len = fragment_trees.len();
-        let merged = Self::second_pass_enclose(fragment_trees);
-        if merged.len() < original_len {
-            Self::enclose_recursive(merged)
-        } else {
-            merged
+        let mut trees = fragment_trees;
+        loop {
+            let original_len = trees.len();
+            let enclosed = Self::second_pass_enclose(trees);
+            if enclosed.len() >= original_len {
+                return enclosed;
+            }
+            trees = enclosed;
         }
     }
 
     /// make all the fragments a fragment tree and try to fit each other
     fn second_pass_enclose(fragment_trees: Vec<Self>) -> Vec<Self> {
-        let mut new_trees: Vec<Self> = vec![];
+        let mut new_trees: Vec<Self> = Vec::with_capacity(fragment_trees.len());
         for frag_tree in fragment_trees {
-            let is_enclosed = new_trees
-                .iter_mut()
-                .rev()
-                .any(|new_tree| new_tree.enclose_deep_first(&frag_tree));
-            if !is_enclosed {
+            let mut unplaced = Some(frag_tree);
+            for new_tree in new_trees.iter_mut().rev() {
+                let candidate =
+                    unplaced.take().expect("candidate is available");
+                match new_tree.enclose_deep_first(candidate) {
+                    Ok(()) => break,
+                    Err(candidate) => unplaced = Some(candidate),
+                }
+            }
+            if let Some(frag_tree) = unplaced {
                 new_trees.push(frag_tree);
             }
         }
         new_trees
     }
 
-    /// convert back into fragments
-    fn into_nodes<MSG>(self) -> Vec<Node<MSG>> {
-        let mut nodes = vec![];
+    fn append_nodes<MSG>(self, nodes: &mut Vec<Node<MSG>>) {
         let mut fragment_node: Node<MSG> = self.fragment.fragment.into();
-        let _css_tag_len = self.css_tag.len();
         fragment_node =
             fragment_node.merge_attributes(vec![classes(self.css_tag)]);
 
         nodes.push(fragment_node);
         for child in self.enclosing {
-            nodes.extend(child.into_nodes())
+            child.append_nodes(nodes);
         }
-        nodes
     }
 
     /// convert fragments to node, where cell_text and text may become
@@ -118,10 +122,11 @@ impl FragmentTree {
     ) -> Vec<Node<MSG>> {
         let fragment_trees: Vec<FragmentTree> =
             Self::enclose_fragments(fragments);
-        fragment_trees
-            .into_iter()
-            .flat_map(|frag_tree| frag_tree.into_nodes())
-            .collect()
+        let mut nodes = Vec::new();
+        for tree in fragment_trees {
+            tree.append_nodes(&mut nodes);
+        }
+        nodes
     }
 }
 

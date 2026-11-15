@@ -169,7 +169,10 @@ pub mod parser {
     pub(crate) fn ident<'a>() -> Parser<'a, char, String> {
         (is_a(alpha_or_underscore) + is_a(alphanum_or_underscore).repeat(0..))
             .map(|(ch1, rest_ch)| {
-                format!("{}{}", ch1, String::from_iter(rest_ch))
+                let mut identifier = String::with_capacity(rest_ch.len() + 1);
+                identifier.push(ch1);
+                identifier.extend(rest_ch);
+                identifier
             })
     }
 
@@ -197,7 +200,14 @@ pub mod parser {
     fn css_strings<'a>() -> Parser<'a, char, String> {
         let char_string = none_of("{}").repeat(1..).map(String::from_iter);
         let string = char_string.repeat(0..);
-        string.map(|strings| strings.concat())
+        string.map(|strings| {
+            let len = strings.iter().map(String::len).sum();
+            let mut joined = String::with_capacity(len);
+            for part in strings {
+                joined.push_str(&part);
+            }
+            joined
+        })
     }
 
     fn css_styles<'a>() -> Parser<'a, char, String> {

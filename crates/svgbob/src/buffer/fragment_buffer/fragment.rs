@@ -262,6 +262,52 @@ impl Fragment {
         }
     }
 
+    pub(crate) fn into_scale(self, scale: f32) -> Self {
+        match self {
+            Fragment::Line(mut line) => {
+                line.start = line.start.scale(scale);
+                line.end = line.end.scale(scale);
+                Fragment::Line(line)
+            }
+            Fragment::MarkerLine(mut marker_line) => {
+                marker_line.line.start = marker_line.line.start.scale(scale);
+                marker_line.line.end = marker_line.line.end.scale(scale);
+                Fragment::MarkerLine(marker_line)
+            }
+            Fragment::Circle(mut circle) => {
+                circle.center = circle.center.scale(scale);
+                circle.radius *= scale;
+                Fragment::Circle(circle)
+            }
+            Fragment::Arc(mut arc) => {
+                arc.start = arc.start.scale(scale);
+                arc.end = arc.end.scale(scale);
+                arc.radius *= scale;
+                Fragment::Arc(arc)
+            }
+            Fragment::Polygon(mut polygon) => {
+                for point in &mut polygon.points {
+                    *point = point.scale(scale);
+                }
+                Fragment::Polygon(polygon)
+            }
+            Fragment::Rect(mut rect) => {
+                rect.start = rect.start.scale(scale);
+                rect.end = rect.end.scale(scale);
+                rect.radius = rect.radius.map(|radius| radius * scale);
+                Fragment::Rect(rect)
+            }
+            Fragment::CellText(cell_text) => Fragment::Text(Text::new(
+                cell_text.start.q().scale(scale),
+                cell_text.content,
+            )),
+            Fragment::Text(mut text) => {
+                text.start = text.start.scale(scale);
+                Fragment::Text(text)
+            }
+        }
+    }
+
     pub fn align(&self) -> Self {
         match self {
             Fragment::Line(line) => Fragment::Line(line.align()),

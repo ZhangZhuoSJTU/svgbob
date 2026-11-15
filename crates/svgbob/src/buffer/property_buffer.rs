@@ -3,8 +3,20 @@ use crate::{
     map::{ASCII_PROPERTIES, UNICODE_FRAGMENTS},
     Cell, Fragment, FragmentBuffer, Merge,
 };
+use once_cell::sync::Lazy;
 pub use property::{Property, Signal};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+
+static ASCII_PROFILE_CHARS: Lazy<BTreeMap<Vec<Fragment>, char>> =
+    Lazy::new(|| {
+        let mut profiles = BTreeMap::new();
+        for (ch, property) in ASCII_PROPERTIES.iter() {
+            profiles
+                .entry(property.strong_profile().to_vec())
+                .or_insert(*ch);
+        }
+        profiles
+    });
 
 mod property;
 
@@ -19,6 +31,27 @@ pub struct PropertyBuffer<'p>(HashMap<Cell, &'p Property>);
 impl<'p> PropertyBuffer<'p> {
     pub fn new() -> Self {
         PropertyBuffer::default()
+    }
+
+    fn surrounding(&self, cell: Cell) -> [&'p Property; 8] {
+        let properties = self.as_ref();
+        let empty = Property::empty_ref();
+        [
+            properties.get(&cell.top_left()).copied().unwrap_or(empty),
+            properties.get(&cell.top()).copied().unwrap_or(empty),
+            properties.get(&cell.top_right()).copied().unwrap_or(empty),
+            properties.get(&cell.left()).copied().unwrap_or(empty),
+            properties.get(&cell.right()).copied().unwrap_or(empty),
+            properties
+                .get(&cell.bottom_left())
+                .copied()
+                .unwrap_or(empty),
+            properties.get(&cell.bottom()).copied().unwrap_or(empty),
+            properties
+                .get(&cell.bottom_right())
+                .copied()
+                .unwrap_or(empty),
+        ]
     }
 
     /// get the appropriate character for this cell
@@ -43,18 +76,8 @@ impl<'p> PropertyBuffer<'p> {
         if let Some(matched_unicode) = matched_unicode {
             Some(matched_unicode)
         } else {
-            let empty = &&Property::empty();
-            let top_left = self.as_ref().get(&cell.top_left()).unwrap_or(empty);
-            let top = self.as_ref().get(&cell.top()).unwrap_or(empty);
-            let top_right =
-                self.as_ref().get(&cell.top_right()).unwrap_or(empty);
-            let left = self.as_ref().get(&cell.left()).unwrap_or(empty);
-            let right = self.as_ref().get(&cell.right()).unwrap_or(empty);
-            let bottom_left =
-                self.as_ref().get(&cell.bottom_left()).unwrap_or(empty);
-            let bottom = self.as_ref().get(&cell.bottom()).unwrap_or(empty);
-            let bottom_right =
-                self.as_ref().get(&cell.bottom_right()).unwrap_or(empty);
+            let [top_left, top, top_right, left, right, bottom_left, bottom, bottom_right] =
+                self.surrounding(cell);
 
             Self::match_char_with_surrounding_properties(
                 fragments,
@@ -84,43 +107,31 @@ impl<'p> PropertyBuffer<'p> {
         bottom: &Property,
         bottom_right: &Property,
     ) -> Option<char> {
-        let signature_match =
-            ASCII_PROPERTIES.iter().find_map(|(ch, property)| {
-                if property.match_profile(fragments) {
-                    Some(*ch)
-                } else {
-                    None
-                }
-            });
-        // if no match in signature, find it in behavior match
-        if signature_match.is_some() {
-            signature_match
-        } else {
-            ASCII_PROPERTIES.iter().find_map(|(ch, property)| {
-                let behavioral_fragments = property.fragments(
-                    top_left,
-                    top,
-                    top_right,
-                    left,
-                    right,
-                    bottom_left,
-                    bottom,
-                    bottom_right,
-                );
-                let mut merged_behavioral_fragments =
-                    Fragment::merge_recursive(behavioral_fragments);
-                merged_behavioral_fragments.sort();
-                merged_behavioral_fragments.dedup();
-                //assert!(merged_behavioral_fragments.is_sorted());
-
-                //assert!(fragments.is_sorted());
-                if merged_behavioral_fragments == *fragments {
-                    Some(*ch)
-                } else {
-                    None
-                }
-            })
+        if let Some(ch) = ASCII_PROFILE_CHARS.get(fragments).copied() {
+            return Some(ch);
         }
+
+        // if no match in signature, find it in behavior match
+        ASCII_PROPERTIES.iter().find_map(|(ch, property)| {
+            let behavioral_fragments = property.fragments(
+                top_left,
+                top,
+                top_right,
+                left,
+                right,
+                bottom_left,
+                bottom,
+                bottom_right,
+            );
+            let mut merged_behavioral_fragments =
+                Fragment::merge_recursive(behavioral_fragments);
+            merged_behavioral_fragments.sort();
+            merged_behavioral_fragments.dedup();
+            //assert!(merged_behavioral_fragments.is_sorted());
+
+            //assert!(fragments.is_sorted());
+            (merged_behavioral_fragments == *fragments).then_some(*ch)
+        })
     }
 }
 
@@ -138,35 +149,16 @@ impl<'p> AsMut<HashMap<Cell, &'p Property>> for PropertyBuffer<'p> {
 /// convert property buffer to fragment buffer
 impl<'p> From<PropertyBuffer<'p>> for FragmentBuffer {
     fn from(property_buffer: PropertyBuffer<'p>) -> FragmentBuffer {
+        FragmentBuffer::from(&property_buffer)
+    }
+}
+
+impl<'p> From<&PropertyBuffer<'p>> for FragmentBuffer {
+    fn from(property_buffer: &PropertyBuffer<'p>) -> FragmentBuffer {
         let mut fb = FragmentBuffer::new();
         for (cell, property) in property_buffer.as_ref() {
-            let empty = &&Property::empty();
-            let top_left = property_buffer
-                .as_ref()
-                .get(&cell.top_left())
-                .unwrap_or(empty);
-            let top =
-                property_buffer.as_ref().get(&cell.top()).unwrap_or(empty);
-            let top_right = property_buffer
-                .as_ref()
-                .get(&cell.top_right())
-                .unwrap_or(empty);
-            let left =
-                property_buffer.as_ref().get(&cell.left()).unwrap_or(empty);
-            let right =
-                property_buffer.as_ref().get(&cell.right()).unwrap_or(empty);
-            let bottom_left = property_buffer
-                .as_ref()
-                .get(&cell.bottom_left())
-                .unwrap_or(empty);
-            let bottom = property_buffer
-                .as_ref()
-                .get(&cell.bottom())
-                .unwrap_or(empty);
-            let bottom_right = property_buffer
-                .as_ref()
-                .get(&cell.bottom_right())
-                .unwrap_or(empty);
+            let [top_left, top, top_right, left, right, bottom_left, bottom, bottom_right] =
+                property_buffer.surrounding(*cell);
             let cell_fragments = property.fragments(
                 top_left,
                 top,

@@ -1,6 +1,6 @@
 use crate::{
     fragment::{Bounds, Rect},
-    Fragment,
+    Fragment, Point,
 };
 
 /// Result of endorsing processes
@@ -25,19 +25,8 @@ pub fn endorse_rect(fragments: &[&Fragment]) -> Option<Rect> {
     if is_rect(fragments) {
         let is_any_broken =
             fragments.iter().any(|fragment| fragment.is_broken());
-        let all_points = fragments.iter().fold(vec![], |mut acc, frag| {
-            let (p1, p2) = frag.bounds();
-            acc.push(p1);
-            acc.push(p2);
-            acc
-        });
-        let min = all_points.iter().min();
-        let max = all_points.iter().max();
-        if let (Some(min), Some(max)) = (min, max) {
-            Some(Rect::new(*min, *max, false, is_any_broken))
-        } else {
-            None
-        }
+        let (min, max) = fragment_bounds(fragments)?;
+        Some(Rect::new(min, max, false, is_any_broken))
     } else {
         None
     }
@@ -74,29 +63,32 @@ pub fn endorse_rounded_rect(fragments: &[&Fragment]) -> Option<Rect> {
     if let (true, arc_radius) = is_rounded_rect(fragments) {
         let is_any_broken =
             fragments.iter().any(|fragment| fragment.is_broken());
-        let all_points = fragments.iter().fold(vec![], |mut acc, frag| {
-            let (p1, p2) = frag.bounds();
-            acc.push(p1);
-            acc.push(p2);
-            acc
-        });
-        let min = all_points.iter().min();
-        let max = all_points.iter().max();
-        if let (Some(min), Some(max)) = (min, max) {
-            //TODO: compute the radius from
-            Some(Rect::rounded_new(
-                *min,
-                *max,
-                false,
-                arc_radius.expect("expecting arc radius"),
-                is_any_broken,
-            ))
-        } else {
-            None
-        }
+        let (min, max) = fragment_bounds(fragments)?;
+        //TODO: compute the radius from
+        Some(Rect::rounded_new(
+            min,
+            max,
+            false,
+            arc_radius.expect("expecting arc radius"),
+            is_any_broken,
+        ))
     } else {
         None
     }
+}
+
+fn fragment_bounds(fragments: &[&Fragment]) -> Option<(Point, Point)> {
+    let mut points = fragments.iter().flat_map(|fragment| {
+        let (start, end) = fragment.bounds();
+        [start, end]
+    });
+    let first = points.next()?;
+    let (mut min, mut max) = (first, first);
+    for point in points {
+        min = std::cmp::min(min, point);
+        max = std::cmp::max(max, point);
+    }
+    Some((min, max))
 }
 
 fn is_rounded_rect(fragments: &[&Fragment]) -> (bool, Option<f32>) {

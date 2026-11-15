@@ -77,7 +77,7 @@ impl Cell {
     /// returns true if the other cell is at: top_left, top, top_right, left, right, bottom_left,
     /// bottom, bottom_right of self
     pub fn is_adjacent(&self, other: &Self) -> bool {
-        (other.x - self.x).abs() <= 1 && (other.y - self.y).abs() <= 1
+        other.x.abs_diff(self.x) <= 1 && other.y.abs_diff(self.y) <= 1
     }
 
     /// Derive which cell this points falls into and snap the point closes to any
@@ -93,11 +93,11 @@ impl Cell {
     }
 
     pub fn snap_group(points: &[Point]) -> Self {
-        let (cells, _snap_points): (Vec<Self>, Vec<Point>) =
-            points.iter().map(|point| Self::snap_point(*point)).unzip();
-        let min_cell: Self =
-            cells.into_iter().min().expect("should have a min cell");
-        min_cell
+        points
+            .iter()
+            .map(|point| Self::snap_point(*point).0)
+            .min()
+            .expect("should have a min cell")
     }
 
     pub(crate) fn absolute_position(&self, point: Point) -> Point {
@@ -145,13 +145,10 @@ impl Cell {
     /// the dots from top-left, top-right, bottom-right, bottom-left then closing to top-left
     /// The polyline is then used to testing for intersection with the line segment
     fn polyline(&self) -> Polyline {
-        let aabb = self.bounding_box();
-        let min = aabb.mins;
-        let max = aabb.maxs;
-        let x1 = min.x;
-        let y1 = min.y;
-        let x2 = max.x;
-        let y2 = max.y;
+        let x1 = self.x as f32 * Self::width();
+        let y1 = self.y as f32 * Self::height();
+        let x2 = (self.x + 1) as f32 * Self::width();
+        let y2 = (self.y + 1) as f32 * Self::height();
         let c1 = Point::new(x1, y1); // top-left
         let c2 = Point::new(x2, y1); // top-right
         let c3 = Point::new(x2, y2); // bottom-right

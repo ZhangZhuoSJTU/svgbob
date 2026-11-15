@@ -3,7 +3,6 @@ pub use direction::Direction;
 pub use fragment::Fragment;
 pub use fragment_span::FragmentSpan;
 pub use fragment_tree::FragmentTree;
-use itertools::Itertools;
 use std::{
     collections::BTreeMap,
     fmt::Write,
@@ -73,24 +72,18 @@ impl FragmentBuffer {
         buff
     }
 
-    /// sort the fragments content in this cell
-    fn sort_fragments_in_cell(&mut self, cell: Cell) {
-        if let Some(fragments) = &mut self.get_mut(&cell) {
-            (*fragments).sort();
-        }
-    }
-
     fn bounds(&self) -> Option<(Cell, Cell)> {
-        let xlimits =
-            self.iter().map(|(cell, _)| cell.x).minmax().into_option();
-        let ylimits =
-            self.iter().map(|(cell, _)| cell.y).minmax().into_option();
-        match (xlimits, ylimits) {
-            (Some((min_x, max_x)), Some((min_y, max_y))) => {
-                Some((Cell::new(min_x, min_y), Cell::new(max_x, max_y)))
-            }
-            _ => None,
+        let mut cells = self.iter().map(|(cell, _)| *cell);
+        let first = cells.next()?;
+        let (mut min_x, mut max_x) = (first.x, first.x);
+        let (mut min_y, mut max_y) = (first.y, first.y);
+        for cell in cells {
+            min_x = min_x.min(cell.x);
+            max_x = max_x.max(cell.x);
+            min_y = min_y.min(cell.y);
+            max_y = max_y.max(cell.y);
         }
+        Some((Cell::new(min_x, min_y), Cell::new(max_x, max_y)))
     }
 
     pub fn get_size(&self, settings: &Settings) -> (f32, f32) {
@@ -109,16 +102,13 @@ impl FragmentBuffer {
         cell: Cell,
         fragment_span: FragmentSpan,
     ) {
-        if let Some(existing) = self.get_mut(&cell) {
-            if !existing.contains(&fragment_span) {
-                existing.push(fragment_span);
-            } else {
-                println!("already contain fragment span..");
-            }
+        let existing = self.entry(cell).or_default();
+        if !existing.contains(&fragment_span) {
+            existing.push(fragment_span);
+            existing.sort();
         } else {
-            self.insert(cell, vec![fragment_span]);
+            println!("already contain fragment span..");
         }
-        self.sort_fragments_in_cell(cell);
     }
 
     /// Add a single fragment to this cell
@@ -139,19 +129,13 @@ impl FragmentBuffer {
         ch: char,
         fragments: Vec<Fragment>,
     ) {
-        let fragment_spans = fragments
-            .into_iter()
-            .map(|fragment| FragmentSpan {
-                span: Span::new(cell, ch),
-                fragment,
-            })
-            .collect();
-        if let Some(existing) = self.get_mut(&cell) {
-            existing.extend(fragment_spans);
-        } else {
-            self.insert(cell, fragment_spans);
-        }
-        self.sort_fragments_in_cell(cell);
+        let existing = self.entry(cell).or_default();
+        existing.reserve(fragments.len());
+        existing.extend(fragments.into_iter().map(|fragment| FragmentSpan {
+            span: Span::new(cell, ch),
+            fragment,
+        }));
+        existing.sort();
     }
 
     pub fn merge_fragment_spans(&self) -> Vec<FragmentSpan> {
@@ -162,12 +146,15 @@ impl FragmentBuffer {
     /// Collect all the fragment span where all fragment spans of each cell
     /// are converted to their absolute position
     fn abs_fragment_spans(&self) -> Vec<FragmentSpan> {
-        self.iter()
-            .flat_map(|(cell, fragment_spans)| {
+        let count = self.values().map(Vec::len).sum();
+        let mut absolute = Vec::with_capacity(count);
+        for (cell, fragment_spans) in self.iter() {
+            absolute.extend(
                 fragment_spans
                     .iter()
-                    .map(|frag_span| frag_span.absolute_position(*cell))
-            })
-            .collect()
+                    .map(|frag_span| frag_span.absolute_position(*cell)),
+            );
+        }
+        absolute
     }
 }
